@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Трафарет · Рисование по камере</title>
+    <style>
+        /* Глобальный сброс и тёмная тема */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background: #0b0b0b;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            touch-action: pan-x pan-y; 
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Контейнер приложения — на весь экран */
+        .app {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Видео занимает весь экран */
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #111;
+            z-index: 1;
+        }
+
+        /* Слой с картинкой-референсом */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none; /* чтобы не мешать взаимодействию с кнопками */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        .overlay img {
+            max-width: 90vmin;
+            max-height: 90vmin;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            opacity: 0.5; /* начальная прозрачность */
+            transform: scale(1);
+            transition: opacity 0.1s, transform 0.1s;
+            pointer-events: none;
+            filter: none;
+        }
+
+        /* Инверсия: белые контуры на чёрном фоне */
+        .overlay img.inverted {
+            filter: invert(1) brightness(1.5) contrast(2);
+        }
+
+        /* Панель управления — нижняя часть экрана, не перекрывает центр */
+        .controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            z-index: 10;
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-top: 1px solid #333;
+            padding: 16px 16px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            border-radius: 24px 24px 0 0;
+            box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6);
+            color: #eee;
+        }
+
+        /* Скрытое состояние панели */
+        .controls.hidden {
+            transform: translateY(100%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Кнопка-переключатель видимости панели */
+        .toggle-btn {
+            position: absolute;
+            top: -48px;
+            right: 20px;
+            z-index: 20;
+            background: #2a2a2a;
+            border: none;
+            color: white;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+            cursor: pointer;
+            transition: background 0.2s, transform 0.2s;
+            border: 1px solid #555;
+        }
+
+        .toggle-btn:active {
+            transform: scale(0.92);
+            background: #3a3a3a;
+        }
+
+        /* Группы ползунков */
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .slider-group label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #aaa;
+            letter-spacing: 0.3px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .slider-group label span {
+            color: #fff;
+            background: #2a2a2a;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 13px;
+            min-width: 48px;
+            text-align: center;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #2e2e2e;
+            border-radius: 10px;
+            outline: none;
+            margin: 4px 0;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 26px;
+            height: 26px;
+            background: #ffffff;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+            border: 2px solid #888;
+            transition: transform 0.1s;
+        }
+
+        input[type=range]::-webkit-slider-thumb:active {
+            transform: scale(1.15);
+            background: #e0e0e0;
+        }
+
+        /* Кнопочные ряды */
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            margin-top: 4px;
+        }
+
+        .btn {
+            background: #2a2a2a;
+            border: 1px solid #4a4a4a;
+            color: white;
+            font-size: 16px;
+            font-weight: 500;
+            padding: 14px 20px;
+            border-radius: 60px;
+            flex: 1 1 auto;
+            min-width: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s, border-color 0.15s;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+            white-space: nowrap;
+        }
+
+        .btn:active {
+            transform: scale(0.96);
+            background: #3a3a3a;
+            border-color: #777;
+        }
+
+        .btn-primary {
+            background: #f0f0f0;
+            color: #111;
+            border-color: #fff;
+            font-weight: 600;
+        }
+
+        .btn-primary:active {
+            background: #ccc;
+        }
+
+        /* Стили для input file — скрываем стандартный, стилизуем label */
+        .file-input-wrapper {
+            position: relative;
+            flex: 1 1 auto;
+            min-width: 120px;
+        }
+
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+            z-index: 2;
+        }
+
+        .file-input-wrapper .btn {
+            width: 100%;
+            margin: 0;
+        }
+
+        /* Индикатор загрузки/ошибки */
+        .status {
+            text-align: center;
+            font-size: 13px;
+            color: #ffaa66;
+            min-height: 18px;
+            padding: 2px 0;
+        }
+
+        /* Адаптив для маленьких экранов */
+        @media (max-width: 400px) {
+            .btn {
+                font-size: 14px;
+                padding: 12px 12px;
+                min-width: 100px;
+            }
+            .controls {
+                padding: 12px 12px 20px;
+                gap: 10px;
+            }
+            .toggle-btn {
+                width: 42px;
+                height: 42px;
+                font-size: 20px;
+                top: -42px;
+                right: 16px;
+            }
+        }
+
+        /* Чтобы изображение не выходило за пределы контейнера при масштабе */
+        .overlay {
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Видеопоток с камеры -->
+        <video id="video" autoplay playsinline muted></video>
+
+        <!-- Слой с референсом -->
+        <div class="overlay" id="overlay">
+            <img id="referenceImage" src="" alt="Референс" style="display: none;">
+        </div>
+
+        <!-- Кнопка скрытия/показа панели -->
+        <button class="toggle-btn" id="toggleControlsBtn" aria-label="Скрыть/показать панель">▲</button>
+
+        <!-- Панель управления -->
+        <div class="controls" id="controlsPanel">
+            <!-- Ползунок прозрачности -->
+            <div class="slider-group">
+                <label>Прозрачность <span id="opacityValue">50%</span></label>
+                <input type="range" id="opacitySlider" min="0" max="1" step="0.01" value="0.5">
+            </div>
+
+            <!-- Ползунок масштаба -->
+            <div class="slider-group">
+                <label>Масштаб <span id="scaleValue">1.00x</span></label>
+                <input type="range" id="scaleSlider" min="0.2" max="3.0" step="0.05" value="1.0">
+            </div>
+
+            <!-- Кнопки -->
+            <div class="btn-row">
+                <!-- Загрузка своей картинки (стилизованный input) -->
+                <div class="file-input-wrapper">
+                    <input type="file" id="fileInput" accept="image/*">
+                    <button class="btn" type="button">📁 Загрузить</button>
+                </div>
+
+                <button class="btn" id="invertBtn">🔄 Инверсия</button>
+                <button class="btn btn-primary" id="captureBtn">📸 Фото</button>
+            </div>
+
+            <!-- Статус / подсказка -->
+            <div class="status" id="statusMessage"></div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // ----- Элементы DOM -----
+            const video = document.getElementById('video');
+            const overlayImg = document.getElementById('referenceImage');
+            const opacitySlider = document.getElementById('opacitySlider');
+            const opacityValue = document.getElementById('opacityValue');
+            const scaleSlider = document.getElementById('scaleSlider');
+            const scaleValue = document.getElementById('scaleValue');
+            const fileInput = document.getElementById('fileInput');
+            const invertBtn = document.getElementById('invertBtn');
+            const captureBtn = document.getElementById('captureBtn');
+            const toggleControlsBtn = document.getElementById('toggleControlsBtn');
+            const controlsPanel = document.getElementById('controlsPanel');
+            const statusMessage = document.getElementById('statusMessage');
+
+            // ----- Переменные состояния -----
+            let currentImage = null;           // Ссылка на загруженный объект изображения (для canvas)
+            let isInverted = false;
+
+            // ----- 1. Запуск камеры (с задней камеры, если возможно) -----
+            async function startCamera() {
+                try {
+                    const constraints = {
+                        video: {
+                            facingMode: 'environment', // задняя камера
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 }
+                        },
+                        audio: false
+                    };
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    video.srcObject = stream;
+                    // Для iOS: атрибуты autoplay и playsinline уже стоят в HTML
+                    await video.play();
+                    statusMessage.textContent = 'Камера активна';
+                } catch (err) {
+                    console.error('Ошибка доступа к камере:', err);
+                    statusMessage.textContent = '⚠️ Не удалось получить доступ к камере. Разрешите доступ.';
+                    // Показываем заглушку
+                    video.style.background = '#1a1a1a';
+                }
+            }
+
+            // ----- 2. Управление прозрачностью -----
+            function updateOpacity(value) {
+                const opacity = parseFloat(value);
+                overlayImg.style.opacity = opacity;
+                opacityValue.textContent = Math.round(opacity * 100) + '%';
+            }
+
+            opacitySlider.addEventListener('input', (e) => {
+                updateOpacity(e.target.value);
+            });
+
+            // ----- 3. Управление масштабом -----
+            function updateScale(value) {
+                const scale = parseFloat(value);
+                overlayImg.style.transform = `scale(${scale})`;
+                scaleValue.textContent = scale.toFixed(2) + 'x';
+            }
+
+            scaleSlider.addEventListener('input', (e) => {
+                updateScale(e.target.value);
+            });
+
+            // ----- 4. Загрузка изображения -----
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                if (!file.type.startsWith('image/')) {
+                    statusMessage.textContent = 'Пожалуйста, выберите изображение.';
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        // Сохраняем ссылку на изображение для canvas
+                        currentImage = img;
+                        // Отображаем в overlay
+                        overlayImg.src = img.src;
+                        overlayImg.style.display = 'block';
+                        // Сбрасываем инверсию, если была
+                        if (isInverted) {
+                            overlayImg.classList.remove('inverted');
+                            isInverted = false;
+                            invertBtn.textContent = '🔄 Инверсия';
+                        }
+                        // Применяем текущие настройки (на случай, если до этого не было картинки)
+                        overlayImg.style.opacity = opacitySlider.value;
+                        overlayImg.style.transform = `scale(${scaleSlider.value})`;
+                        updateOpacity(opacitySlider.value);
+                        updateScale(scaleSlider.value);
+                        statusMessage.textContent = 'Изображение загружено';
+                    };
+                    img.onerror = () => {
+                        statusMessage.textContent = 'Ошибка загрузки изображения.';
+                    };
+                    img.src = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+
+            // ----- 5. Инверсия цветов -----
+            invertBtn.addEventListener('click', () => {
+                if (!currentImage) {
+                    statusMessage.textContent = 'Сначала загрузите изображение.';
+                    return;
+                }
+                isInverted = !isInverted;
+                if (isInverted) {
+                    overlayImg.classList.add('inverted');
+                    invertBtn.textContent = '🔄 Обычный';
+                } else {
+                    overlayImg.classList.remove('inverted');
+                    invertBtn.textContent = '🔄 Инверсия';
+                }
+                statusMessage.textContent = isInverted ? 'Инверсия включена' : 'Инверсия выключена';
+            });
+
+            // ----- 6. Сделать фото (видео + картинка) -----
+            captureBtn.addEventListener('click', () => {
+                // Проверяем, что видео имеет размеры
+                if (!video.videoWidth || !video.videoHeight) {
+                    statusMessage.textContent = 'Видео ещё не готово. Подождите.';
+                    return;
+                }
+
+                // Создаём canvas размером с видео
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+
+                // 1. Рисуем текущий кадр видео
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // 2. Если есть изображение-референс — рисуем его с учётом прозрачности, масштаба и инверсии
+                if (currentImage && overlayImg.style.display !== 'none') {
+                    // Получаем настройки
+                    const opacity = parseFloat(opacitySlider.value);
+                    const scale = parseFloat(scaleSlider.value);
+                    const inverted = isInverted;
+
+                    // Сохраняем контекст для применения трансформаций
+                    ctx.save();
+
+                    // Центрируем и масштабируем
+                    ctx.translate(canvas.width / 2, canvas.height / 2);
+                    ctx.scale(scale, scale);
+
+                    // Устанавливаем прозрачность
+                    ctx.globalAlpha = opacity;
+
+                    // Применяем инверсию через фильтр canvas (если поддерживается)
+                    if (inverted) {
+                        // Используем фильтр для инверсии цветов
+                        ctx.filter = 'invert(1) brightness(1.5) contrast(2)';
+                    } else {
+                        ctx.filter = 'none';
+                    }
+
+                    // Рисуем изображение по центру
+                    // Размеры: подгоняем под видео? Но лучше сохранять пропорции и вписывать как в overlay (max 90vmin)
+                    // Однако в overlay использовался object-fit: contain с max-width/height 90vmin. 
+                    // Для canvas сделаем аналогично: вписываем в квадрат со стороной 90% от меньшей стороны.
+                    const minSide = Math.min(canvas.width, canvas.height);
+                    const maxSize = minSide * 0.9; // 90% от меньшей стороны (как в CSS)
+                    const imgAspect = currentImage.width / currentImage.height;
+                    let drawWidth, drawHeight;
+
+                    if (imgAspect > 1) {
+                        // Ширина больше высоты
+                        drawWidth = Math.min(maxSize, maxSize * imgAspect);
+                        drawHeight = drawWidth / imgAspect;
+                    } else {
+                        drawHeight = Math.min(maxSize, maxSize / imgAspect);
+                        drawWidth = drawHeight * imgAspect;
+                    }
+
+                    // Рисуем с центрированием (уже сдвинуты в центр)
+                    ctx.drawImage(currentImage, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+
+                    // Восстанавливаем контекст
+                    ctx.restore();
+
+                    // Сбрасываем фильтр (на всякий случай)
+                    ctx.filter = 'none';
+                }
+
+                // 3. Сохраняем в PNG
+                try {
+                    const dataURL = canvas.toDataURL('image/png');
+                    const link = document.createElement('a');
+                    link.download = `трафарет_${Date.now()}.png`;
+                    link.href = dataURL;
+                    link.click();
+                    statusMessage.textContent = '✅ Фото сохранено';
+                } catch (err) {
+                    console.error('Ошибка сохранения:', err);
+                    statusMessage.textContent = '❌ Ошибка сохранения фото';
+                }
+            });
+
+            // ----- 7. Скрыть/показать панель управления -----
+            toggleControlsBtn.addEventListener('click', () => {
+                const isHidden = controlsPanel.classList.toggle('hidden');
+                // Меняем стрелку и подпись
+                if (isHidden) {
+                    toggleControlsBtn.textContent = '▲';
+                    toggleControlsBtn.setAttribute('aria-label', 'Показать панель');
+                } else {
+                    toggleControlsBtn.textContent = '▼';
+                    toggleControlsBtn.setAttribute('aria-label', 'Скрыть панель');
+                }
+            });
+
+            // ----- 8. Инициализация: запуск камеры и установка начальных значений -----
+            window.addEventListener('load', () => {
+                // Запускаем камеру
+                startCamera();
+
+                // Устанавливаем начальные значения для ползунков
+                updateOpacity(opacitySlider.value);
+                updateScale(scaleSlider.value);
+
+                // Скрываем картинку, пока не загружена
+                overlayImg.style.display = 'none';
+
+                // Небольшая задержка для видео, чтобы отобразить статус
+                setTimeout(() => {
+                    if (!video.srcObject) {
+                        statusMessage.textContent = 'Нажмите "Загрузить", чтобы добавить референс.';
+                    } else {
+                        statusMessage.textContent = 'Готово. Загрузите картинку-трафарет.';
+                    }
+                }, 800);
+            });
+
+            // При изменении размера окна пересчитывать не нужно — всё на CSS/vmin.
+
+            // Дополнительно: предотвращаем случайное закрытие/обновление на iOS при свайпах (не обязательно)
+            // Но не будем блокировать скролл, так как всё на весь экран.
+        })();
+    </script>
+</body>
+</html>
